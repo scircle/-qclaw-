@@ -15,7 +15,7 @@ from docx.shared import Pt
 from pypinyin import lazy_pinyin, Style
 
 
-FIXED_HEADER = "和园跑团少儿晨读会"
+FIXED_HEADER = "跑团少儿晨读会"
 
 HEADER_FONT = "STHupo"
 HEADER_SIZE_PT = 28
