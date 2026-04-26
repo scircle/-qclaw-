@@ -1,3 +1,5 @@
+
+   
 #!/usr/bin/env python3
 import argparse
 import json
@@ -13,14 +15,19 @@ from docx.shared import Pt
 from pypinyin import lazy_pinyin, Style
 
 
-FIXED_HEADER = "跑团少儿晨读会"
+FIXED_HEADER = "和园跑团少儿晨读会"
 
 HEADER_FONT = "STHupo"
 HEADER_SIZE_PT = 28
 
 POEM_FONT = "KaiTi"
-POEM_SIZE_PT = 20
+
+TITLE_SIZE_PT = 20
+AUTHOR_SIZE_PT = 20
+BODY_SIZE_PT = 16
 RUBY_SIZE_PT = 12
+
+END_PUNCT = set("。！？；…")
 
 ALLOWED_DYNASTIES = {
     "先秦", "秦", "汉", "东汉", "魏", "晋", "西晋", "东晋",
@@ -53,6 +60,15 @@ def normalize_text(text: str) -> str:
 
 def is_chinese_char(ch: str) -> bool:
     return "\u4e00" <= ch <= "\u9fff"
+
+
+def normalize_poem_line_punctuation(line: str) -> str:
+    s = line.strip()
+    if not s:
+        return s
+    if s[-1] not in END_PUNCT:
+        s += "。"
+    return s
 
 
 def validate_title(title: str):
@@ -118,22 +134,18 @@ def validate_lines(lines):
         raise ValueError("lines must contain at least 2 lines")
     if len(lines) > 30:
         raise ValueError("too many lines in one poem")
-    norm = [normalize_text(x) for x in lines]
+
+    normalized_lines = [normalize_poem_line_punctuation(x) for x in lines if x.strip()]
+    norm = [normalize_text(x) for x in normalized_lines]
+
     if len(set(norm)) != len(norm):
         raise ValueError("duplicated poem lines")
-    for line in lines:
+
+    for line in normalized_lines:
         validate_line(line)
 
+    return normalized_lines
 
-END_PUNCT = set("。！？；…")
-
-def normalize_poem_line_punctuation(line: str) -> str:
-    s = line.strip()
-    if not s:
-        return s
-    if s[-1] not in END_PUNCT:
-        s += "。"
-    return s
 
 def validate_poems(poems):
     if not isinstance(poems, list):
@@ -155,23 +167,21 @@ def validate_poems(poems):
         validate_title(poem["title"])
         validate_dynasty(poem["dynasty"])
         validate_author(poem["author"])
-        validate_lines(poem["lines"])
+        normalized_lines = validate_lines(poem["lines"])
 
         title = poem["title"].strip()
-        key = normalize_text(title)
-        if key in seen:
+        title_key = normalize_text(title)
+
+        if title_key in seen:
             raise ValueError(f"duplicated title: {title}")
-        seen.add(key)
+
+        seen.add(title_key)
 
         normalized.append({
             "title": title,
             "dynasty": poem["dynasty"].strip(),
             "author": poem["author"].strip(),
-            "lines": [
-               normalize_poem_line_punctuation(x)
-               for x in poem["lines"]
-               if x.strip()
-            ],
+            "lines": normalized_lines,
         })
 
     return normalized
@@ -191,13 +201,13 @@ def add_center_text_paragraph(doc: Document, text: str, font_name: str, size_pt:
     return p
 
 
-def append_plain_run(paragraph, text: str):
+def append_plain_run(paragraph, text: str, base_size_pt: int):
     r = paragraph.add_run(text)
-    set_run_font(r, POEM_FONT, POEM_SIZE_PT)
+    set_run_font(r, POEM_FONT, base_size_pt)
     return r
 
 
-def create_ruby_element(base_char: str, ruby_text: str):
+def create_ruby_element(base_char: str, ruby_text: str, base_size_pt: int):
     ruby = OxmlElement("w:ruby")
 
     ruby_pr = OxmlElement("w:rubyPr")
@@ -211,11 +221,11 @@ def create_ruby_element(base_char: str, ruby_text: str):
     ruby_pr.append(hps)
 
     hps_raise = OxmlElement("w:hpsRaise")
-    hps_raise.set(qn("w:val"), str(int((POEM_SIZE_PT + 2) * 2)))
+    hps_raise.set(qn("w:val"), str(int((base_size_pt + 2) * 2)))
     ruby_pr.append(hps_raise)
 
     hps_base = OxmlElement("w:hpsBaseText")
-    hps_base.set(qn("w:val"), str(int(POEM_SIZE_PT * 2)))
+    hps_base.set(qn("w:val"), str(int(base_size_pt * 2)))
     ruby_pr.append(hps_base)
 
     lid = OxmlElement("w:lid")
@@ -263,11 +273,11 @@ def create_ruby_element(base_char: str, ruby_text: str):
     rb_rpr.append(rb_fonts)
 
     rb_sz = OxmlElement("w:sz")
-    rb_sz.set(qn("w:val"), str(int(POEM_SIZE_PT * 2)))
+    rb_sz.set(qn("w:val"), str(int(base_size_pt * 2)))
     rb_rpr.append(rb_sz)
 
     rb_szcs = OxmlElement("w:szCs")
-    rb_szcs.set(qn("w:val"), str(int(POEM_SIZE_PT * 2)))
+    rb_szcs.set(qn("w:val"), str(int(base_size_pt * 2)))
     rb_rpr.append(rb_szcs)
 
     rb_r.append(rb_rpr)
@@ -281,16 +291,16 @@ def create_ruby_element(base_char: str, ruby_text: str):
     return ruby
 
 
-def add_ruby_text_paragraph(doc: Document, text: str):
+def add_ruby_text_paragraph(doc: Document, text: str, base_size_pt: int):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     for ch in text:
         if is_chinese_char(ch):
             py = lazy_pinyin(ch, style=Style.TONE)[0]
-            p._p.append(create_ruby_element(ch, py))
+            p._p.append(create_ruby_element(ch, py, base_size_pt))
         else:
-            append_plain_run(p, ch)
+            append_plain_run(p, ch, base_size_pt)
 
     return p
 
@@ -301,11 +311,15 @@ def build_doc(poems):
     add_center_text_paragraph(doc, FIXED_HEADER, HEADER_FONT, HEADER_SIZE_PT)
 
     for idx, poem in enumerate(poems):
-        add_ruby_text_paragraph(doc, poem["title"])
-        add_ruby_text_paragraph(doc, f"【{poem['dynasty']}】{poem['author']}")
+        add_ruby_text_paragraph(doc, poem["title"], TITLE_SIZE_PT)
+        add_ruby_text_paragraph(
+            doc,
+            f"【{poem['dynasty']}】{poem['author']}",
+            AUTHOR_SIZE_PT
+        )
 
         for line in poem["lines"]:
-            add_ruby_text_paragraph(doc, line)
+            add_ruby_text_paragraph(doc, line, BODY_SIZE_PT)
 
         if idx != len(poems) - 1:
             doc.add_paragraph("")
